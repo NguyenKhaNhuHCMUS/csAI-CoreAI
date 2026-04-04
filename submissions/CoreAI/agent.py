@@ -108,8 +108,7 @@ Hider (Ghost) Agent
 """
 
 from collections import deque
-from environment import Move
-import numpy as np
+
 
 
 class Hider:
