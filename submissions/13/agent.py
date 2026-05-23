@@ -819,3 +819,124 @@ class PacmanAgent(BasePacmanAgent):
         self.brain.prev_move = action[0] if isinstance(action, tuple) else action
 
         return action
+
+
+# HIDER/GHOST
+
+class Hider:
+    def __init__(self):
+        self.dead_ends = set()
+        self.map_analyzed = False
+        self.known_map = None
+
+    # 1. Tính khoảng cách từ Seeker đến các ô có thể đi
+    def bfs_from_seeker(self, my_pos, enemy_pos, map_state):
+        if enemy_pos is None:
+            return {}
+
+        h, w = map_state.shape
+        distances = {}
+        q = deque([(enemy_pos[0], enemy_pos[1], 0)])
+        visited = {enemy_pos}
+
+        while q:
+            r, c, d = q.popleft()
+            distances[(r, c)] = d
+
+            for dr, dc in [(-1,0), (1,0), (0,-1), (0,1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and map_state[nr, nc] != 1 and (nr, nc) not in visited:
+                    visited.add((nr, nc))
+                    q.append((nr, nc, d + 1))
+
+        return distances
+
+    # 2. Xác định các ô ngõ cụt trong map
+    def identify_dead_ends(self, map_state):
+        h, w = map_state.shape
+        dead = set()
+
+        for i in range(h):
+            for j in range(w):
+                if map_state[i, j] == 0 or map_state[i, j] == -1:
+                    cnt = 0
+                    for dr, dc in [(-1,0), (1,0), (0,-1), (0,1)]:
+                        ni, nj = i + dr, j + dc
+                        if 0 <= ni < h and 0 <= nj < w and map_state[ni, nj] != 1:
+                            cnt += 1
+                    if cnt <= 1:
+                        dead.add((i, j))
+        return dead
+
+    # 3. Chấm điểm độ an toàn của một ô
+    def evaluate_safety(self, pos, enemy_pos, distances, map_state):
+        if enemy_pos is None:
+            return 0
+
+        # Càng xa Seeker càng tốt
+        distance_score = distances.get(pos, 0)
+
+        # Tránh ngõ cụt
+        penalty = -100 if pos in self.dead_ends else 0
+
+        # Thưởng nếu vào ô chưa khám phá (-1)
+        if map_state[pos[0], pos[1]] == -1:
+            penalty += 50
+
+        return distance_score + penalty
+
+    # 4. Chọn hướng chạy trốn khi thấy Seeker
+    def flee_enemy(self, my_pos, enemy_pos, map_state):
+        distances = self.bfs_from_seeker(my_pos, enemy_pos, map_state)
+
+        best_move = Move.STAY
+        best_score = -10**9
+
+        for move in MOVES:
+            nr = my_pos[0] + move.value[0]
+            nc = my_pos[1] + move.value[1]
+            if 0 <= nr < 21 and 0 <= nc < 21 and map_state[nr, nc] != 1:
+                score = self.evaluate_safety((nr, nc), enemy_pos, distances, map_state)
+                if score > best_score:
+                    best_score = score
+                    best_move = move
+
+        return best_move
+
+    # 5. Chọn vị trí an toàn khi không thấy Seeker
+    def hide_when_safe(self, my_pos, map_state, step_number):
+        # Ưu tiên: lên trên → phải → trái → xuống
+        for dr, dc, move in [(-1,0,Move.UP), (0,1,Move.RIGHT), (0,-1,Move.LEFT), (1,0,Move.DOWN)]:
+            nr, nc = my_pos[0] + dr, my_pos[1] + dc
+            if 0 <= nr < 21 and 0 <= nc < 21 and map_state[nr, nc] != 1:
+                return move
+        return Move.STAY
+
+    # 6. Quyết định hành động cuối cùng của Hider
+    def get_hider_action(self, map_state, my_pos, enemy_pos, step_number):
+        # Lưu map đã thấy
+        if self.known_map is None:
+            self.known_map = map_state.copy()
+        else:
+            for i in range(21):
+                for j in range(21):
+                    if map_state[i, j] != -1:
+                        self.known_map[i, j] = map_state[i, j]
+
+        # Phân tích dead ends 1 lần
+        if not self.map_analyzed:
+            self.dead_ends = self.identify_dead_ends(self.known_map)
+            self.map_analyzed = True
+
+        if enemy_pos is not None:
+            return self.flee_enemy(my_pos, enemy_pos, map_state)
+        else:
+            return self.hide_when_safe(my_pos, map_state, step_number)
+        
+class GhostAgent(BaseGhostAgent):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hider = Hider()
+
+    def step(self, map_state, my_position, enemy_position, step_number):
+        return self.hider.get_hider_action(map_state, my_position, enemy_position, step_number)
